@@ -59,10 +59,10 @@ contract Remittance {
         require(waitingForWithdrawal && !withdrawn);
         require((bobsKeccak256 == _bobsKeccak256) && (carolsKeccak256 == _carolsKeccak256));
 
+        withdrawn = true;
         commissionAmount = amount * commissionPercentage / uint(100);
         toPayInLocalCurrency = (amount - commissionAmount) / uint(1000000000000000000) * ether2CurrencyRate;
         msg.sender.transfer(commissionAmount);
-        withdrawn = true;
         LogCommission(msg.sender, commissionAmount);
         LogWithdrawal(msg.sender, toPayInLocalCurrency);
         return(commissionAmount, toPayInLocalCurrency);
