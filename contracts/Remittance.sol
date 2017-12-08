@@ -11,6 +11,7 @@ contract Remittance {
     bytes32 public bobsKeccak256;
     bytes32 public carolsKeccak256;
     bool public waitingForWithdrawal;
+    bool public withdrawn;
 
     event LogDeposit(address userAddress, uint depositAmount);
     event LogCommission(address userAddress, uint commissionAmount);
@@ -34,7 +35,7 @@ contract Remittance {
         payable
         returns(bool)
     {
-        require(!waitingForWithdrawal);
+        require(!waitingForWithdrawal && !withdrawn);
         require(msg.value > 0);
         // if Carol is trying to send money to some Bob using her own service, it must be a mistake
         require(msg.sender != carol);
@@ -55,12 +56,13 @@ contract Remittance {
         returns(uint commissionAmount, uint toPayInLocalCurrency)
     {
         require(msg.sender == carol);
-        require(waitingForWithdrawal);
+        require(waitingForWithdrawal && !withdrawn);
         require((bobsKeccak256 == _bobsKeccak256) && (carolsKeccak256 == _carolsKeccak256));
 
         commissionAmount = amount * commissionPercentage / uint(100);
         toPayInLocalCurrency = (amount - commissionAmount) / uint(1000000000000000000) * ether2CurrencyRate;
         msg.sender.transfer(commissionAmount);
+        withdrawn = true;
         LogCommission(msg.sender, commissionAmount);
         LogWithdrawal(msg.sender, toPayInLocalCurrency);
         return(commissionAmount, toPayInLocalCurrency);
