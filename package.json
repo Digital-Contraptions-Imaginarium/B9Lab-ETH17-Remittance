@@ -1,0 +1,26 @@
+{
+  "name": "b9lab-eth17-remittance",
+  "version": "0.0.1",
+  "description": "",
+  "main": "truffle.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "mocha"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Digital-Contraptions-Imaginarium/B9Lab-ETH17-Remittance.git"
+  },
+  "author": "Gianfranco Cecconi <giacecco@dico.im>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Digital-Contraptions-Imaginarium/B9Lab-ETH17-Remittance/issues"
+  },
+  "homepage": "https://github.com/Digital-Contraptions-Imaginarium/B9Lab-ETH17-Remittance#readme",
+  "dependencies": {
+    "install": "^0.10.2",
+    "npm": "^5.6.0"
+  }
+}
