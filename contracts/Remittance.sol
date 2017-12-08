@@ -12,7 +12,7 @@ contract Remittance {
     bytes32 public carolsKeccak256;
     bool public waitingForWithdrawal;
 
-    event LogDeposit(address userAddress, uint amount);
+    event LogDeposit(address userAddress, uint depositAmount);
     event LogCommission(address userAddress, uint commissionAmount);
     event LogWithdrawal(address userAddress, uint localCurrencyAmount);
 
@@ -59,7 +59,7 @@ contract Remittance {
         require((bobsKeccak256 == _bobsKeccak256) && (carolsKeccak256 == _carolsKeccak256));
 
         commissionAmount = amount * commissionPercentage / uint(100);
-        toPayInLocalCurrency = (amount - commissionAmount) * ether2CurrencyRate;
+        toPayInLocalCurrency = (amount - commissionAmount) / uint(1000000000000000000) * ether2CurrencyRate;
         msg.sender.transfer(commissionAmount);
         LogCommission(msg.sender, commissionAmount);
         LogWithdrawal(msg.sender, toPayInLocalCurrency);
