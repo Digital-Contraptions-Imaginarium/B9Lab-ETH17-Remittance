@@ -1,21 +1,31 @@
 pragma solidity ^0.4.15;
 
+// This is a first basic implementation of the problem. Situations that still need being managed
+// are:
+// - Bob is currently paying the commission: is that fair? Shouldn't it be Alice?
+// - Bob and Carol never meet and Alice's money is frozen in the contract: this can be solved
+//   by allowing Alice to get the money back after a certain time (blocks)
+// - What if withdraw fail? It is not clear if the current code will revert also the withdrawn
+//   variable being set to true, if the transfer fails.
+
 contract Remittance {
 
+    address public alice;
     address public carol;
-    uint public amount;
     // the exchange rate is expressed as an integer, e.g. 3 means 1 ether = 3 units of currency
     uint public ether2CurrencyRate;
     // commission percentage is expressed as an integer, e.g. 2 for 2%
     uint public commissionPercentage;
     bytes32 public bobsKeccak256;
     bytes32 public carolsKeccak256;
-    bool public waitingForWithdrawal;
-    bool public withdrawn;
+    bool public deposited;
+    bool public waitingForTransfer;
+    bool public successfulTransfer;
+    bool public refunded;
 
     event LogDeposit(address userAddress, uint depositAmount);
     event LogCommission(address userAddress, uint commissionAmount);
-    event LogWithdrawal(address userAddress, uint localCurrencyAmount);
+    event LogTransfer(bool success, address userAddress, uint localCurrencyAmount);
 
     // NOTE: the contract creator is the exchange shop (Carol), as she needs to set the
     // currency rate and commission % before Alice decides to use their services.
@@ -35,37 +45,60 @@ contract Remittance {
         payable
         returns(bool)
     {
-        require(!waitingForWithdrawal && !withdrawn);
+        require(!deposited);
         require(msg.value > 0);
-        // if Carol is trying to send money to some Bob using her own service, it must be a mistake
-        require(msg.sender != carol);
 
-        amount = msg.value;
+        deposited = true;
+        waitingForTransfer = true;
+        alice = msg.sender;
         bobsKeccak256 = _bobsKeccak256;
         carolsKeccak256 = _carolsKeccak256;
-        waitingForWithdrawal = true;
-        LogDeposit(msg.sender, msg.value);
+        LogDeposit(alice, this.balance);
         return(true);
     }
 
-    // Withdraw needs to be called by Carol, with Bob being present for the hash of his password.
-    // It credits her with the commission, and returns in the LogDeposit event the amount to
-    // credit Bob in Wei and in local currency.
-    function withdraw(bytes32 _bobsKeccak256, bytes32 _carolsKeccak256)
+    // This function credits Carol with the whole value of the contract, and returns in
+    // LogTransfer the information required to pay Bob in local currency, minus the commission.
+    // It needs to be called Carol, with Bob being present, so that they can input both
+    // their passwords as they were assigned to them by Alice.
+    // It has to be called by Carol as it is fair that she pays for the gas, as she gets a
+    // commission compensating her.
+    // Note: because the passwords are visible in the transaction payload, they should not be used
+    //       more than once. Hence, if transferring the money to Carol fails, the whole operation
+    //       needs being cancelled, and Alice enabled to get a refund.
+    function transfer(string _bobsPassword, string _carolsPassword)
         public
-        returns(uint commissionAmount, uint toPayInLocalCurrency)
+        returns(bool success, uint commissionAmount, uint toPayInLocalCurrency)
     {
         require(msg.sender == carol);
-        require(waitingForWithdrawal && !withdrawn);
-        require((bobsKeccak256 == _bobsKeccak256) && (carolsKeccak256 == _carolsKeccak256));
+        require(deposited && waitingForTransfer);
+        require(bobsKeccak256 == keccak256(_bobsPassword));
+        require(carolsKeccak256 == keccak256(_carolsPassword));
 
-        withdrawn = true;
-        commissionAmount = amount * commissionPercentage / uint(100);
-        toPayInLocalCurrency = (amount - commissionAmount) / uint(1000000000000000000) * ether2CurrencyRate;
-        msg.sender.transfer(commissionAmount);
-        LogCommission(msg.sender, commissionAmount);
-        LogWithdrawal(msg.sender, toPayInLocalCurrency);
-        return(commissionAmount, toPayInLocalCurrency);
+        waitingForTransfer = false;
+        commissionAmount = this.balance * commissionPercentage / uint(100);
+        toPayInLocalCurrency = (this.balance - commissionAmount) / uint(1000000000000000000) * ether2CurrencyRate;
+        successfulTransfer = carol.send(this.balance);
+        LogTransfer(successfulTransfer, msg.sender, toPayInLocalCurrency);
+        if (successfulTransfer) LogCommission(msg.sender, commissionAmount);
+        return(successfulTransfer, commissionAmount, toPayInLocalCurrency);
+    }
+
+    // If Bob and Carol use their passwords correctly but the transfer of the funds to Carol
+    // fails, they should not use the passwords again and the only action possible is for Alice
+    // to be refunded.
+    function refund()
+        public
+        returns(bool)
+    {
+        require(msg.sender == alice);
+        require(!waitingForTransfer && !successfulTransfer && !refunded);
+
+        // this is to avoid re-entrance
+        refunded = true;
+        // this is to allow Alice to try again, in case of failure
+        refunded = msg.sender.send(this.balance);
+        return(refunded);
     }
 
 }
