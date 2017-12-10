@@ -2,11 +2,12 @@ pragma solidity ^0.4.15;
 
 // This is a first basic implementation of the problem. Situations that still need being managed
 // are:
-// - Bob is currently paying the commission: is that fair? Shouldn't it be Alice?
 // - Bob and Carol never meet and Alice's money is frozen in the contract: this can be solved
 //   by allowing Alice to get the money back after a certain time (blocks)
-// - What if withdraw fail? It is not clear if the current code will revert also the withdrawn
-//   variable being set to true, if the transfer fails.
+
+// TODO
+// - stretch goals
+// - Rob's suggestion at https://b9labacademy.slack.com/archives/G7C3K7VK6/p1512865360000038?thread_ts=1512860367.000041&cid=G7C3K7VK6
 
 contract Remittance {
 
