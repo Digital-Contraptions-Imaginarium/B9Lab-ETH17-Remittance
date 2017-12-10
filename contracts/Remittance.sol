@@ -26,6 +26,7 @@ contract Remittance {
     event LogDeposit(address userAddress, uint depositAmount);
     event LogCommission(address userAddress, uint commissionAmount);
     event LogTransfer(bool success, address userAddress, uint localCurrencyAmount);
+    event LogRefund(address userAddress, uint refundAmount);
 
     // NOTE: the contract creator is the exchange shop (Carol), as she needs to set the
     // currency rate and commission % before Alice decides to use their services.
@@ -70,10 +71,12 @@ contract Remittance {
         public
         returns(bool success, uint commissionAmount, uint toPayInLocalCurrency)
     {
+        // only Carol can trigger the transfer...
         require(msg.sender == carol);
+        // ... if the money was deposited, and transfer not attempted yet
         require(deposited && waitingForTransfer);
-        require(bobsKeccak256 == keccak256(_bobsPassword));
-        require(carolsKeccak256 == keccak256(_carolsPassword));
+        // .. and if the passwords are correct
+        require((bobsKeccak256 == keccak256(_bobsPassword)) && (carolsKeccak256 == keccak256(_carolsPassword)));
 
         waitingForTransfer = false;
         commissionAmount = this.balance * commissionPercentage / uint(100);
@@ -91,14 +94,19 @@ contract Remittance {
         public
         returns(bool)
     {
+        // only Alice can ask for a refund of course
         require(msg.sender == alice);
-        require(!waitingForTransfer && !successfulTransfer && !refunded);
+        // ... and there must be money to refund
+        require(this.balance > 0);
+        // ... and a previous transfer to Carol must have been attempted and failed
+        require(!waitingForTransfer && !successfulTransfer);
+        // ... and refund was not attempted before
+        require(!refunded);
 
-        // this is to avoid re-entrance
         refunded = true;
-        // this is to allow Alice to try again, in case of failure
-        refunded = msg.sender.send(this.balance);
-        return(refunded);
+        msg.sender.transfer(this.balance);
+        LogRefund(alice, this.balance);
+        return(true);
     }
 
 }
