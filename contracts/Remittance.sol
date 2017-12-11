@@ -1,112 +1,111 @@
 pragma solidity ^0.4.15;
 
-// This is a first basic implementation of the problem. Situations that still need being managed
-// are:
-// - Bob and Carol never meet and Alice's money is frozen in the contract: this can be solved
-//   by allowing Alice to get the money back after a certain time (blocks)
-
-// TODO
-// - stretch goals
-// - Rob's suggestion at https://b9labacademy.slack.com/archives/G7C3K7VK6/p1512865360000038?thread_ts=1512860367.000041&cid=G7C3K7VK6
-
 contract Remittance {
 
-    address public alice;
-    address public carol;
-    // the exchange rate is expressed as an integer, e.g. 3 means 1 ether = 3 units of currency
-    uint public ether2CurrencyRate;
+    // that's the exchange shop's address
+    address public owner;
+    // the exchange rate is expressed as an integer, e.g. 3 means 1 Wei = 3 units of currency
+    uint public wei2CurrencyRate;
     // commission percentage is expressed as an integer, e.g. 2 for 2%
     uint public commissionPercentage;
-    bytes32 public bobsKeccak256;
-    bytes32 public carolsKeccak256;
-    bool public deposited;
-    bool public waitingForTransfer;
-    bool public successfulTransfer;
-    bool public refunded;
+    // the default duration of each remittance instruction is expressed in no. of blocks
+    // following the deposit, after which the sender is entitled to a refund
+    uint public defaultDuration;
 
-    event LogDeposit(address userAddress, uint depositAmount);
-    event LogCommission(address userAddress, uint commissionAmount);
-    event LogTransfer(bool success, address userAddress, uint localCurrencyAmount);
-    event LogRefund(address userAddress, uint refundAmount);
+    struct RemittanceInstruction {
+        address sender;
+        uint expirationBlock; // the latest possible block no. to transfer
+        uint depositedAmount; // Wei
+        uint commissionAmount; // Wei
+        uint localCurrencyAmount; // local currency
+        bytes32 beneficiaryPasswordHash;
+        bytes32 exchangePasswordHash;
+    }
+    mapping (address => RemittanceInstruction) public remittanceInstructions;
+
+    event LogDeposit(address sender, uint depositedAmount);
+    event LogTransfer(address sender, uint localCurrencyAmount, uint commissionAmount);
+    event LogRefund(address sender, uint depositedAmount);
 
     // NOTE: the contract creator is the exchange shop (Carol), as she needs to set the
-    // currency rate and commission % before Alice decides to use their services.
-    function Remittance(uint _ether2CurrencyRate, uint _commissionPercentage)
+    // currency rate and commission % before any client decides to use their services.
+    function Remittance(uint _wei2CurrencyRate, uint _commissionPercentage, uint _defaultDuration)
         public
     {
-        carol = msg.sender;
-        ether2CurrencyRate = _ether2CurrencyRate;
+        owner = msg.sender;
+        defaultDuration = _defaultDuration;
+        wei2CurrencyRate = _wei2CurrencyRate;
         commissionPercentage = _commissionPercentage;
     }
 
-    // this is the function Alice uses to deposit into the contract and specify Bob and Carol's
-    // passwords; the password are converted to their hash by JavaScript on the browser, before
-    // calling the deposit function
-    function deposit(bytes32 _bobsKeccak256, bytes32 _carolsKeccak256)
+    // This is the function anyone can use to create new remittance instructions - including the
+    // passwords intended for the beneficiary and the exchange shop to unlock the funds - and to
+    // deposit the funds themselves.
+    function deposit(bytes32 _beneficiaryPasswordHash, bytes32 _exchangePasswordHash)
         public
         payable
         returns(bool)
     {
-        require(!deposited);
+        // no pre-existing instruction and deposit for this sender exists
+        require(remittanceInstructions[msg.sender].depositedAmount == 0);
+        // need to put some money in it
         require(msg.value > 0);
 
-        deposited = true;
-        waitingForTransfer = true;
-        alice = msg.sender;
-        bobsKeccak256 = _bobsKeccak256;
-        carolsKeccak256 = _carolsKeccak256;
-        LogDeposit(alice, this.balance);
+        remittanceInstructions[msg.sender].sender = msg.sender;
+        remittanceInstructions[msg.sender].expirationBlock = block.number + defaultDuration;
+        remittanceInstructions[msg.sender].depositedAmount = msg.value;
+        remittanceInstructions[msg.sender].beneficiaryPasswordHash = _beneficiaryPasswordHash;
+        remittanceInstructions[msg.sender].exchangePasswordHash = _exchangePasswordHash;
+        LogDeposit(msg.sender, msg.value);
         return(true);
     }
 
-    // This function credits Carol with the whole value of the contract, and returns in
-    // LogTransfer the information required to pay Bob in local currency, minus the commission.
-    // It needs to be called Carol, with Bob being present, so that they can input both
-    // their passwords as they were assigned to them by Alice.
-    // It has to be called by Carol as it is fair that she pays for the gas, as she gets a
-    // commission compensating her.
-    // Note: because the passwords are visible in the transaction payload, they should not be used
-    //       more than once. Hence, if transferring the money to Carol fails, the whole operation
-    //       needs being cancelled, and Alice enabled to get a refund.
-    function transfer(string _bobsPassword, string _carolsPassword)
+    // This function credits the exchange shop with the whole value of the contract, and returns in
+    // LogTransfer the information required to pay the beneficiary in local currency, minus the
+    // commission.
+    // It needs to be called by the exchange shop, with the beneficiary being present, so that they
+    // can input both their passwords as they were assigned to them by the sender.
+    // It has to be called by the exchange shop as it is fair that they pay for the gas, as they
+    // get a commission compensating them for the service.
+    function transfer(address senderAddress, string _beneficiaryPassword, string _exchangePassword)
         public
-        returns(bool success, uint commissionAmount, uint toPayInLocalCurrency)
+        returns(bool success)
     {
-        // only Carol can trigger the transfer...
-        require(msg.sender == carol);
-        // ... if the money was deposited, and transfer not attempted yet
-        require(deposited && waitingForTransfer);
-        // .. and if the passwords are correct
-        require((bobsKeccak256 == keccak256(_bobsPassword)) && (carolsKeccak256 == keccak256(_carolsPassword)));
+        // only the exchange shop can trigger the transfer...
+        require(msg.sender == owner);
+        // ... if there is money in it...
+        require(remittanceInstructions[senderAddress].depositedAmount > 0);
+        // .. if the passwords are correct...
+        require((remittanceInstructions[senderAddress].beneficiaryPasswordHash == keccak256(_beneficiaryPassword)) && (remittanceInstructions[senderAddress].exchangePasswordHash == keccak256(_exchangePassword)));
+        // ... and if the available time has not expired
+        require(block.number <= remittanceInstructions[msg.sender].expirationBlock);
 
-        waitingForTransfer = false;
-        commissionAmount = this.balance * commissionPercentage / uint(100);
-        toPayInLocalCurrency = (this.balance - commissionAmount) / uint(1000000000000000000) * ether2CurrencyRate;
-        successfulTransfer = carol.send(this.balance);
-        LogTransfer(successfulTransfer, msg.sender, toPayInLocalCurrency);
-        if (successfulTransfer) LogCommission(msg.sender, commissionAmount);
-        return(successfulTransfer, commissionAmount, toPayInLocalCurrency);
+        uint depositedAmount = remittanceInstructions[msg.sender].depositedAmount;
+        remittanceInstructions[msg.sender].depositedAmount = 0;
+        uint commissionAmount = depositedAmount * commissionPercentage / uint(100);
+        uint localCurrencyAmount = (depositedAmount - commissionAmount) * wei2CurrencyRate;
+        owner.transfer(depositedAmount);
+        LogTransfer(senderAddress, localCurrencyAmount, commissionAmount);
+        return(true);
     }
 
-    // If Bob and Carol use their passwords correctly but the transfer of the funds to Carol
-    // fails, they should not use the passwords again and the only action possible is for Alice
-    // to be refunded.
+    // If the beneficiary and the exchange shop use their passwords correctly but the transfer of
+    // the funds to the shop fails, they should not use the passwords again and the only action
+    // possible is for the sender to be refunded.
     function refund()
         public
         returns(bool)
     {
-        // only Alice can ask for a refund of course
-        require(msg.sender == alice);
-        // ... and there must be money to refund
-        require(this.balance > 0);
-        // ... and a previous transfer to Carol must have been attempted and failed
-        require(!waitingForTransfer && !successfulTransfer);
-        // ... and refund was not attempted before
-        require(!refunded);
+        // only the sender can ask for a refund of course, and we can tell if active remittance
+        // instructions exist for her address
+        require(remittanceInstructions[msg.sender].depositedAmount > 0);
+        // ... and the available time for the beneficiary and exchange shop has expired
+        require(block.number > remittanceInstructions[msg.sender].expirationBlock);
 
-        refunded = true;
-        msg.sender.transfer(this.balance);
-        LogRefund(alice, this.balance);
+        uint depositedAmount = remittanceInstructions[msg.sender].depositedAmount;
+        remittanceInstructions[msg.sender].depositedAmount = 0;
+        msg.sender.transfer(depositedAmount);
+        LogRefund(msg.sender, depositedAmount);
         return(true);
     }
 
