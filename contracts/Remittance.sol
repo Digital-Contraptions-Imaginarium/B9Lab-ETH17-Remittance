@@ -1,5 +1,7 @@
 pragma solidity ^0.4.15;
 
+// Note: this contract allows only one remittance instruction per beneficiary password
+
 contract Remittance {
 
     // that's the exchange shop's address
@@ -13,19 +15,22 @@ contract Remittance {
     uint public defaultDuration;
 
     struct RemittanceInstruction {
-        address sender;
+        address senderAddress;
         uint expirationBlock; // the latest possible block no. to transfer
         uint depositedAmount; // Wei
         uint commissionAmount; // Wei
         uint localCurrencyAmount; // local currency
-        bytes32 beneficiaryPasswordHash;
         bytes32 exchangePasswordHash;
     }
-    mapping (address => RemittanceInstruction) public remittanceInstructions;
+    // the hash of the beneficiary's password is used as each instruction's location in the
+    // mapping
+    mapping (bytes32 => RemittanceInstruction) public remittanceInstructions;
 
-    event LogDeposit(address sender, uint depositedAmount);
-    event LogTransfer(address sender, uint localCurrencyAmount, uint commissionAmount);
-    event LogRefund(address sender, uint depositedAmount);
+    // The beneficiary's password hash is issued as part of all events because it allows the
+    // unambiguous identification of the remittance instruction the events are describing
+    event LogDeposit(bytes32 beneficiaryPasswordHash, address sender, uint depositedAmount);
+    event LogTransfer(bytes32 beneficiaryPasswordHash, uint localCurrencyAmount, uint commissionAmount);
+    event LogRefund(bytes32 beneficiaryPasswordHash, uint depositedAmount);
 
     // NOTE: the contract creator is the exchange shop (Carol), as she needs to set the
     // currency rate and commission % before any client decides to use their services.
@@ -46,17 +51,15 @@ contract Remittance {
         payable
         returns(bool)
     {
-        // no pre-existing instruction and deposit for this sender exists
-        require(remittanceInstructions[msg.sender].depositedAmount == 0);
+        // no pre-existing instruction for this beneficiary password hash exists
+        require(remittanceInstructions[_beneficiaryPasswordHash].depositedAmount == 0);
         // need to put some money in it
         require(msg.value > 0);
 
-        remittanceInstructions[msg.sender].sender = msg.sender;
-        remittanceInstructions[msg.sender].expirationBlock = block.number + defaultDuration;
-        remittanceInstructions[msg.sender].depositedAmount = msg.value;
-        remittanceInstructions[msg.sender].beneficiaryPasswordHash = _beneficiaryPasswordHash;
-        remittanceInstructions[msg.sender].exchangePasswordHash = _exchangePasswordHash;
-        LogDeposit(msg.sender, msg.value);
+        remittanceInstructions[_beneficiaryPasswordHash].senderAddress = msg.sender;         remittanceInstructions[_beneficiaryPasswordHash].expirationBlock = block.number + defaultDuration;
+        remittanceInstructions[_beneficiaryPasswordHash].depositedAmount = msg.value;
+        remittanceInstructions[_beneficiaryPasswordHash].exchangePasswordHash = _exchangePasswordHash;
+        LogDeposit(_beneficiaryPasswordHash, msg.sender, msg.value);
         return(true);
     }
 
@@ -67,45 +70,52 @@ contract Remittance {
     // can input both their passwords as they were assigned to them by the sender.
     // It has to be called by the exchange shop as it is fair that they pay for the gas, as they
     // get a commission compensating them for the service.
-    function transfer(address senderAddress, string _beneficiaryPassword, string _exchangePassword)
+    function transfer(string _beneficiaryPassword, string _exchangePassword)
         public
         returns(bool success)
     {
+        // This is the address in remittanceInstructions the hash where the RemittanceInstruction
+        // struct is presumed to be; the beneficiary password needs being right to find it!
+        bytes32 remittanceInstructionAddress = keccak256(_beneficiaryPassword);
+
         // only the exchange shop can trigger the transfer...
         require(msg.sender == owner);
-        // ... if there is money in it...
-        require(remittanceInstructions[senderAddress].depositedAmount > 0);
-        // .. if the passwords are correct...
-        require((remittanceInstructions[senderAddress].beneficiaryPasswordHash == keccak256(_beneficiaryPassword)) && (remittanceInstructions[senderAddress].exchangePasswordHash == keccak256(_exchangePassword)));
+        // ... if the remittance instruction exists for this beneficiary password hash, and there
+        // is money in it...
+        require(remittanceInstructions[remittanceInstructionAddress].depositedAmount > 0);
+        // .. if the exchange password is correct, too...
+        require(remittanceInstructions[remittanceInstructionAddress].exchangePasswordHash == keccak256(_exchangePassword));
         // ... and if the available time has not expired
-        require(block.number <= remittanceInstructions[msg.sender].expirationBlock);
+        require(block.number <= remittanceInstructions[remittanceInstructionAddress].expirationBlock);
 
-        uint depositedAmount = remittanceInstructions[msg.sender].depositedAmount;
-        remittanceInstructions[msg.sender].depositedAmount = 0;
+        uint depositedAmount = remittanceInstructions[remittanceInstructionAddress].depositedAmount;
+        remittanceInstructions[remittanceInstructionAddress].depositedAmount = 0;
         uint commissionAmount = depositedAmount * commissionPercentage / uint(100);
         uint localCurrencyAmount = (depositedAmount - commissionAmount) * wei2CurrencyRate;
         owner.transfer(depositedAmount);
-        LogTransfer(senderAddress, localCurrencyAmount, commissionAmount);
+        LogTransfer(remittanceInstructionAddress, localCurrencyAmount, commissionAmount);
         return(true);
     }
 
     // If the beneficiary and the exchange shop use their passwords correctly but the transfer of
     // the funds to the shop fails, they should not use the passwords again and the only action
     // possible is for the sender to be refunded.
-    function refund()
+    function refund(bytes32 _beneficiaryPasswordHash)
         public
         returns(bool)
     {
-        // only the sender can ask for a refund of course, and we can tell if active remittance
-        // instructions exist for her address
-        require(remittanceInstructions[msg.sender].depositedAmount > 0);
-        // ... and the available time for the beneficiary and exchange shop has expired
-        require(block.number > remittanceInstructions[msg.sender].expirationBlock);
+        // only the sender can ask for a refund...
+        require(msg.sender == remittanceInstructions[_beneficiaryPasswordHash].senderAddress);
+        // ... while the beneficiary password's hash allows to identify the specific instruction,
+        // and if there is money in it
+        require(remittanceInstructions[_beneficiaryPasswordHash].depositedAmount > 0);
+        // ... finally, the available time for the beneficiary and exchange shop must have expired
+        require(block.number > remittanceInstructions[_beneficiaryPasswordHash].expirationBlock);
 
-        uint depositedAmount = remittanceInstructions[msg.sender].depositedAmount;
-        remittanceInstructions[msg.sender].depositedAmount = 0;
+        uint depositedAmount = remittanceInstructions[_beneficiaryPasswordHash].depositedAmount;
+        remittanceInstructions[_beneficiaryPasswordHash].depositedAmount = 0;
         msg.sender.transfer(depositedAmount);
-        LogRefund(msg.sender, depositedAmount);
+        LogRefund(_beneficiaryPasswordHash, depositedAmount);
         return(true);
     }
 
